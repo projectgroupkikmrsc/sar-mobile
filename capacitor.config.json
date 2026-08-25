@@ -1,0 +1,14 @@
+{
+  "appId": "my.gov.apmm.srumobile",
+  "appName": "M-SRU NAV",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "Geolocation": {}
+  }
+}
