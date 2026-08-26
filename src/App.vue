@@ -418,9 +418,8 @@
 
           <!-- 4. CUACA MARITIM & KEADAAN LAUT MODAL (DENGAN 2 TAB LOKASI) -->
           <div v-else-if="paparCuacaModal" key="cuaca" style="background: rgba(15, 23, 42, 0.95); border: 1px solid #38bdf8; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 10px; max-height: 440px; overflow-y: auto; box-shadow: 0 10px 30px rgba(0,0,0,0.7);">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 6px;">
+            <div style="display: flex; justify-content: center; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 6px;">
               <span style="font-size: 12px; font-weight: bold; color: #38bdf8;">🌦️ DATA CUACA & KEADAAN LAUT</span>
-              <button @click="paparCuacaModal = false" style="background: transparent; border: none; color: #94a3b8; font-size: 14px; cursor: pointer; padding: 0 4px;">✕</button>
             </div>
 
             <!-- 2 Tab Pemilihan Lokasi: Bot vs CSP/Zon Sektor -->
@@ -508,6 +507,11 @@
             <div v-else style="color: #f87171; font-size: 11px; text-align: center; padding: 15px;">
               Gagal memuat turun data cuaca maritim. Sila pastikan capaian internet aktif.
             </div>
+
+            <!-- Butang Tutup di Bawah Modal -->
+            <button @click="paparCuacaModal = false" style="background: #334155; color: #cbd5e1; border: none; padding: 9px 14px; border-radius: 6px; font-size: 11px; font-weight: bold; cursor: pointer; margin-top: 2px; width: 100%; transition: 0.2s;">
+              TUTUP
+            </button>
           </div>
 
           <!-- 5. MESSAGE PANEL -->
