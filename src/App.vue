@@ -125,6 +125,26 @@
          }"
          style="height: 100vh; display: flex; flex-direction: column; position: relative;">
       
+      <!-- Banner Notifikasi Terapung (Mesej / Sighting / MOB dari peranti lain) -->
+      <transition name="pop">
+        <div v-if="toastNotifikasi.papar" 
+             @click="klikToastNotifikasi"
+             :style="{
+               background: toastNotifikasi.jenis === 'mob' ? 'rgba(220, 38, 38, 0.96)' : (toastNotifikasi.jenis === 'sighting' ? 'rgba(234, 88, 12, 0.96)' : 'rgba(15, 23, 42, 0.96)'),
+               borderColor: toastNotifikasi.jenis === 'mob' ? '#ffffff' : (toastNotifikasi.jenis === 'sighting' ? '#fb923c' : '#38bdf8')
+             }"
+             style="position: absolute; top: 12px; left: 12px; right: 12px; z-index: 10000; border-width: 1.5px; border-style: solid; border-radius: 8px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; box-shadow: 0 8px 30px rgba(0,0,0,0.8); cursor: pointer; backdrop-filter: blur(10px); animation: pulse 1.5s infinite;">
+          <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
+            <span style="font-size: 22px;">{{ toastNotifikasi.ikon }}</span>
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-size: 11px; font-weight: 800; color: #ffffff; text-transform: uppercase; letter-spacing: 0.5px;">{{ toastNotifikasi.tajuk }}</div>
+              <div style="font-size: 10px; color: #f1f5f9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px;">{{ toastNotifikasi.mesej }}</div>
+            </div>
+          </div>
+          <button @click.stop="toastNotifikasi.papar = false" style="background: rgba(0,0,0,0.3); border: none; color: white; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; cursor: pointer;">✕</button>
+        </div>
+      </transition>
+
       <div style="position: absolute; top: 10px; left: 10px; right: 10px; z-index: 999; display: flex; flex-direction: column; gap: 6px;">
         <!-- Bar 1: Data Telemetri & Navigasi Waypoint -->
         <div style="background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(10px); border: 1px solid #334155; border-radius: 8px; padding: 8px; display: flex; gap: 4px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">
@@ -890,13 +910,87 @@ const playWaypointChime = () => {
   }
 }
 
+const playIncomingMessageSound = () => {
+  playAudioTone(880, 'sine', 0.1)
+  setTimeout(() => playAudioTone(1174, 'sine', 0.18), 100)
+  if (navigator.vibrate) {
+    navigator.vibrate([120, 60, 120])
+  }
+}
+
+const playSightingSound = () => {
+  playAudioTone(600, 'triangle', 0.12)
+  setTimeout(() => playAudioTone(900, 'triangle', 0.2), 120)
+  if (navigator.vibrate) {
+    navigator.vibrate([200, 100, 200])
+  }
+}
+
 const playMobAlarm = () => {
-  for (let i = 0; i < 4; i++) {
-    setTimeout(() => playAudioTone(950, 'sawtooth', 0.15), i * 200)
+  for (let i = 0; i < 6; i++) {
+    setTimeout(() => playAudioTone(950, 'sawtooth', 0.15), i * 180)
   }
   if (navigator.vibrate) {
-    navigator.vibrate([400, 150, 400, 150, 400])
+    navigator.vibrate([500, 150, 500, 150, 500, 150, 500])
   }
+}
+
+// STATE NOTIFIKASI TOAST TERAPUNG (IN-APP TOAST BANNER)
+const toastNotifikasi = ref({
+  papar: false,
+  jenis: 'mesej', // 'mesej' | 'mob' | 'sighting'
+  ikon: '💬',
+  tajuk: '',
+  mesej: '',
+  timer: null
+})
+
+const tunjukToastNotifikasi = (jenis, ikon, tajuk, mesej, tempoh = 6000) => {
+  if (toastNotifikasi.value.timer) {
+    clearTimeout(toastNotifikasi.value.timer)
+  }
+  toastNotifikasi.value = {
+    papar: true,
+    jenis,
+    ikon,
+    tajuk,
+    mesej,
+    timer: setTimeout(() => {
+      toastNotifikasi.value.papar = false
+    }, tempoh)
+  }
+}
+
+const klikToastNotifikasi = () => {
+  if (toastNotifikasi.value.jenis === 'mob') {
+    paparMobModal.value = true
+  } else if (toastNotifikasi.value.jenis === 'sighting') {
+    paparSightingModal.value = true
+  } else {
+    paparChat.value = true
+    unreadCount.value = 0
+  }
+  toastNotifikasi.value.papar = false
+}
+
+const mintaIzinNotifikasi = () => {
+  try {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission()
+    }
+  } catch (e) {}
+}
+
+const hantarNotifikasiOS = (title, body) => {
+  try {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification(title, {
+        body: body,
+        icon: logoApmm,
+        silent: false
+      })
+    }
+  } catch (e) {}
 }
 
 const distanceToMob = computed(() => {
@@ -2114,12 +2208,68 @@ const hentiTracking = async () => {
   if (cspMarker.value) { map.value.removeLayer(cspMarker.value); cspMarker.value = null }
   if (userMarker.value) { map.value.removeLayer(userMarker.value); userMarker.value = null }
   map.value = null
+
+  if (chatPollingTimer) {
+    clearInterval(chatPollingTimer)
+    chatPollingTimer = null
+  }
+  if (chatChannel) {
+    supabase.removeChannel(chatChannel)
+    chatChannel = null
+  }
+  toastNotifikasi.value.papar = false
+
   currentScreen.value = 'setup'
 }
 
 // =========================================================================
-// LOGIK FASA D: TAKTICAL REALTIME CHAT MENGIKUT KES SPESIFIK
+// LOGIK FASA D: TAKTICAL REALTIME CHAT & NOTIFIKASI KECEMASAN MERENTAS PERANTI
 // =========================================================================
+let chatChannel = null
+let chatPollingTimer = null
+
+const prosesMesejMasuk = (msgObj) => {
+  if (!msgObj || !msgObj.id) return
+  if (Number(msgObj.case_id) !== Number(selectedCaseId.value)) return
+  if (msgObj.chat_type && msgObj.chat_type !== 'local') return
+
+  const mesejWujud = senaraiMesej.value.some(msg => msg.id === msgObj.id)
+  if (!mesejWujud) {
+    senaraiMesej.value.push(msgObj)
+    autoScrollChat()
+
+    // Semak sama ada mesej ini dihantar oleh peranti / aset LAIN
+    const isFromOtherDevice = (msgObj.sender || '').trim().toLowerCase() !== (selectedAsset.value || '').trim().toLowerCase()
+
+    if (isFromOtherDevice) {
+      if (!paparChat.value) {
+        unreadCount.value++
+      }
+
+      const text = msgObj.message || ''
+
+      // 1. KES MOB (MAN OVERBOARD) DARI PERANTI LAIN
+      if (text.includes('[KECEMASAN MAYDAY / MOB]') || text.includes('MOB') || text.includes('MAYDAY')) {
+        playMobAlarm()
+        tunjukToastNotifikasi('mob', '🚨', `AMARAN MOB: ${msgObj.sender}`, text, 12000)
+        hantarNotifikasiOS(`🚨 AMARAN MOB: ${msgObj.sender}`, text)
+      } 
+      // 2. KES SIGHTING / PENEMUAN DARI PERANTI LAIN
+      else if (text.includes('[PENEMUAN/SIGHTING]') || text.includes('PENEMUAN') || text.includes('SIGHTING')) {
+        playSightingSound()
+        tunjukToastNotifikasi('sighting', '📍', `PENEMUAN: ${msgObj.sender}`, text, 8000)
+        hantarNotifikasiOS(`📍 Penemuan Baru dari ${msgObj.sender}`, text)
+      } 
+      // 3. MESEJ CHAT BIASA DARI PERANTI LAIN
+      else {
+        playIncomingMessageSound()
+        tunjukToastNotifikasi('mesej', '💬', `Mesej dari ${msgObj.sender}`, text, 5000)
+        hantarNotifikasiOS(`💬 ${msgObj.sender}`, text)
+      }
+    }
+  }
+}
+
 const muatTurunMesej = async () => {
   const { data } = await supabase
     .from('sar_messages')
@@ -2128,7 +2278,9 @@ const muatTurunMesej = async () => {
     .eq('chat_type', 'local')
     .order('created_at', { ascending: true })
     
-  if (data) senaraiMesej.value = data
+  if (data && data.length > 0) {
+    senaraiMesej.value = data
+  }
   autoScrollChat()
 }
 
@@ -2142,29 +2294,52 @@ const hantarMesej = async () => {
     chat_type: 'local'
   }
 
-  const { error } = await supabase.from('sar_messages').insert([customMsg])
+  const { data, error } = await supabase.from('sar_messages').insert([customMsg]).select().single()
   if (!error) {
     mesejBaharu.value = ''
+    if (data) {
+      senaraiMesej.value.push(data)
+      autoScrollChat()
+    }
   }
 }
 
 const dengarChatLive = () => {
-  supabase
-    .channel('sar-messages-live')
+  if (chatChannel) {
+    supabase.removeChannel(chatChannel)
+    chatChannel = null
+  }
+
+  mintaIzinNotifikasi()
+
+  // 1. Langgan Saluran Realtime Supabase (Postgres Changes & Broadcast)
+  chatChannel = supabase
+    .channel(`sar-messages-case-${selectedCaseId.value}`)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'sar_messages' }, payload => {
-      if (payload.new.case_id === Number(selectedCaseId.value) && payload.new.chat_type === 'local') {
-        // Mencegah pertindihan data mesej yang sama masuk ke dalam array perbualan
-        const mesejWujud = senaraiMesej.value.some(msg => msg.id === payload.new.id)
-        if (!mesejWujud) {
-          senaraiMesej.value.push(payload.new)
-          if (!paparChat.value) {
-            unreadCount.value++
-          }
-          autoScrollChat()
-        }
+      if (payload && payload.new) {
+        prosesMesejMasuk(payload.new)
       }
     })
-    .subscribe()
+    .subscribe((status) => {
+      console.log(`📡 Status Saluran Realtime M-SRU NAV: ${status}`)
+    })
+
+  // 2. Polling sandaran (Fallback Poller) setiap 2.5 saat bagi memastikan notifikasi sentiasa diterima tanpa tercicir
+  if (chatPollingTimer) clearInterval(chatPollingTimer)
+  chatPollingTimer = setInterval(async () => {
+    if (currentScreen.value === 'map' && selectedCaseId.value) {
+      const { data } = await supabase
+        .from('sar_messages')
+        .select('*')
+        .eq('case_id', Number(selectedCaseId.value))
+        .eq('chat_type', 'local')
+        .order('created_at', { ascending: true })
+
+      if (data && data.length > 0) {
+        data.forEach(msg => prosesMesejMasuk(msg))
+      }
+    }
+  }, 2500)
 }
 
 const autoScrollChat = () => {
