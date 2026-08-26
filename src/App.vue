@@ -703,6 +703,10 @@ const labelLayer = ref(null)
 const isSatelit = ref(false)
 const cspMarker = ref(null)
 const wpMarkersList = ref([])
+const planPolygonsList = ref([])
+const otherFleetMarkers = new Map()
+let fleetPresenceTimer = null
+let fleetTelemetryChannel = null
 
 // Koordinat Sasaran CSP & Waypoint Dinamik
 const targetCspLat = ref(null);
@@ -1372,6 +1376,7 @@ const initMap = () => {
   });
 
   muatTurunPelanSAROPSDariWeb();
+  langganKedudukanAsetLain();
 };
 
 const tukarModPeta = () => {
@@ -1433,13 +1438,18 @@ const muatTurunDetailPelanSAROPS = async () => {
 };
 
 const muatTurunPelanSAROPSDariWeb = async () => {
-  if (!selectedCaseId.value) return;
+  if (!selectedCaseId.value || !map.value) return;
 
-  // Bersihkan penanda waypoint sedia ada pada peta
+  // Bersihkan penanda waypoint & polygon sedia ada pada peta
   wpMarkersList.value.forEach(m => {
     if (map.value && m) map.value.removeLayer(m);
   });
   wpMarkersList.value = [];
+
+  planPolygonsList.value.forEach(p => {
+    if (map.value && p) map.value.removeLayer(p);
+  });
+  planPolygonsList.value = [];
 
   const { data, error } = await supabase
     .from('sar_plans')
@@ -1452,39 +1462,42 @@ const muatTurunPelanSAROPSDariWeb = async () => {
   }
 
   if (data) {
+    const cleanAsset = selectedAsset.value ? selectedAsset.value.trim().toLowerCase() : '';
+
     data.forEach(pelan => {
-      const warnaTema = '#10b981'; // Hijau taktikal standard SRU
-      const cleanAsset = selectedAsset.value ? selectedAsset.value.trim().toLowerCase() : '';
       const isMyAsset = pelan.sru_name && cleanAsset && (pelan.sru_name.trim().toLowerCase() === cleanAsset);
 
       // 1. Lukis Kotak Sempadan Kawasan Carian (Search Area Polygon)
+      // UNTUK SEMUA ASET: Sektor bot sendiri & Sektor bot-bot lain (Search Area sahaja)
       if (pelan.corner_points && Array.isArray(pelan.corner_points) && pelan.corner_points.length >= 4) {
         const pts = pelan.corner_points.filter(p => p !== null && Array.isArray(p) && p.length >= 2);
         if (pts.length >= 4) {
-          // Guna L.polygon untuk melukis kawasan tertutup bersegi
-          L.polygon(pts, { 
-            color: warnaTema, 
-            weight: 2, 
-            fillColor: warnaTema, 
-            fillOpacity: 0.1 
-          }).addTo(map.value).bindTooltip(`ZON KAWASAN: ${pelan.zone_name || 'ZON'}`);
+          const polyColor = isMyAsset ? '#10b981' : '#94a3b8';
+          const polyFill = isMyAsset ? '#10b981' : '#475569';
+          const polyOpacity = isMyAsset ? 0.15 : 0.06;
+          const polyWeight = isMyAsset ? 2.5 : 1.5;
+          const polyDash = isMyAsset ? null : '4, 4';
+          const tooltipLabel = isMyAsset ? `🎯 SEKTOR ANDA: ${pelan.sru_name}` : `SEKTOR: ${pelan.sru_name}`;
+
+          const poly = L.polygon(pts, { 
+            color: polyColor, 
+            weight: polyWeight,
+            dashArray: polyDash,
+            fillColor: polyFill, 
+            fillOpacity: polyOpacity 
+          }).addTo(map.value).bindTooltip(tooltipLabel, { permanent: false, direction: 'center' });
+
+          planPolygonsList.value.push(poly);
         }
       }
 
-      // 2. Lukis Garisan Laluan Carian Bot (Sortie Track / Waypoints)
-      if (pelan.sortie_waypoints && Array.isArray(pelan.sortie_waypoints) && pelan.sortie_waypoints.length > 0) {
-        const waypoints = pelan.sortie_waypoints.filter(p => p !== null && Array.isArray(p) && p.length >= 2);
-        if (waypoints.length > 0) {
-          // Guna L.polyline dengan dashArray untuk garisan taktikal putus-putus
-          L.polyline(waypoints, { 
-            color: '#fbbf24', // Warna oren/kuning amaran untuk track laluan
-            weight: 2, 
-            dashArray: '5, 8', 
-            opacity: 0.9 
-          }).addTo(map.value);
-
-          // Jika ini milik aset yang sedang dipilih pengguna, simpan waypoints & lukis penanda bernombor
-          if (isMyAsset) {
+      // 2. Lukis Garisan Laluan Waypoint & CSP (HANYA UNTUK ASET SENDIRI)
+      // Bot-bot lain TIDAK akan dilukis waypoints mereka agar peta kekal bersih dan fokus
+      if (isMyAsset) {
+        // A. Garisan & Penanda Waypoints Aset Sendiri
+        if (pelan.sortie_waypoints && Array.isArray(pelan.sortie_waypoints) && pelan.sortie_waypoints.length > 0) {
+          const waypoints = pelan.sortie_waypoints.filter(p => p !== null && Array.isArray(p) && p.length >= 2);
+          if (waypoints.length > 0) {
             activeSortieWaypoints.value = waypoints;
             selectedPlanDetails.value = {
               ...pelan,
@@ -1494,6 +1507,15 @@ const muatTurunPelanSAROPSDariWeb = async () => {
               search_area_width: parseFloat(pelan.search_area_width || pelan.width || pelan.search_width || 0),
               track_spacing: pelan.track_spacing || pelan.spacing || 0
             };
+
+            const trackLine = L.polyline(waypoints, { 
+              color: '#fbbf24', 
+              weight: 2, 
+              dashArray: '5, 8', 
+              opacity: 0.9 
+            }).addTo(map.value);
+            planPolygonsList.value.push(trackLine);
+
             waypoints.forEach((wp, idx) => {
               const wpMarker = L.circleMarker(wp, {
                 color: '#38bdf8',
@@ -1505,39 +1527,154 @@ const muatTurunPelanSAROPSDariWeb = async () => {
             });
           }
         }
-      }
 
-      // 3. Lukis Titik Mula Carian (CSP - Commence Search Point)
-      if (pelan.csp_coord && Array.isArray(pelan.csp_coord) && pelan.csp_coord.length >= 2) {
-        const cspM = L.circleMarker(pelan.csp_coord, { 
-          color: '#ef4444', 
-          fillColor: '#ef4444', 
-          fillOpacity: 1, 
-          radius: 5 
-        }).addTo(map.value).bindTooltip(`CSP (${pelan.sru_name})`, { permanent: false, direction: 'top' });
-        wpMarkersList.value.push(cspM);
+        // B. Titik CSP Aset Sendiri (Commence Search Point)
+        if (pelan.csp_coord && Array.isArray(pelan.csp_coord) && pelan.csp_coord.length >= 2) {
+          const cspM = L.circleMarker(pelan.csp_coord, { 
+            color: '#ef4444', 
+            fillColor: '#ef4444', 
+            fillOpacity: 1, 
+            radius: 6 
+          }).addTo(map.value).bindTooltip(`🎯 CSP (${pelan.sru_name})`, { permanent: false, direction: 'top' });
+          wpMarkersList.value.push(cspM);
 
-        // Jika CSP ini milik aset yang sedang dipilih, set sebagai target untuk pengiraan jarak dan garisan
-        if (isMyAsset) {
           activeCspCoord.value = pelan.csp_coord;
           targetCspLat.value = pelan.csp_coord[0];
           targetCspLng.value = pelan.csp_coord[1];
           if (currentNavIndex.value === -1 && !telahTibaCsp.value) {
-            currentNavIndex.value = -1; // Mula dari CSP
+            currentNavIndex.value = -1;
           }
           console.log(`📡 CSP Dinamik Diterima [${selectedAsset.value}]: ${targetCspLat.value}, ${targetCspLng.value}`);
         }
       }
     });
 
-    // Jika tiada CSP tetapi ada waypoint, mulakan navigasi terus dari WP 1
     if (!activeCspCoord.value && activeSortieWaypoints.value.length > 0 && currentNavIndex.value === -1) {
       currentNavIndex.value = 0;
     }
 
-    // Fokuskan peta secara automatik ke kawasan carian kes yang dipilih
     fokusKeKawasanSAR();
   }
+};
+
+// =========================================================================
+// PENJEJAKAN LOKASI LANGSUNG ARMADA ASET LAIN (REALTIME FLEET TRACKING)
+// =========================================================================
+const muatSemulaKedudukanAsetLain = async () => {
+  if (!map.value || currentScreen.value !== 'map') return;
+
+  try {
+    const { data: telemetryData, error } = await supabase
+      .from('sru_telemetry')
+      .select('*');
+
+    if (error || !telemetryData) return;
+
+    const activeCutoff = new Date(Date.now() - 15 * 60 * 1000);
+    const myBoatName = (selectedAsset.value || '').trim().toLowerCase();
+
+    const otherBoats = telemetryData.filter(t => {
+      const bName = (t.boat_id || t.sru_name || '').trim().toLowerCase();
+      const isSelf = bName === myBoatName;
+      const isRecent = new Date(t.created_at) > activeCutoff;
+      const hasCoords = Number(t.latitude) !== 0 && Number(t.longitude) !== 0 && !isNaN(t.latitude) && !isNaN(t.longitude);
+      return !isSelf && isRecent && hasCoords;
+    });
+
+    const activeBoatIds = new Set(otherBoats.map(b => (b.boat_id || b.sru_name).trim()));
+
+    // 1. Buang penanda bot yang sudah logout / tidak aktif
+    for (const [boatId, markerObj] of otherFleetMarkers.entries()) {
+      if (!activeBoatIds.has(boatId)) {
+        if (map.value && markerObj.marker) {
+          map.value.removeLayer(markerObj.marker);
+        }
+        otherFleetMarkers.delete(boatId);
+      }
+    }
+
+    // 2. Lukis / kemas kini penanda bot lain yang aktif
+    otherBoats.forEach(boat => {
+      const boatId = (boat.boat_id || boat.sru_name).trim();
+      const lat = Number(boat.latitude);
+      const lng = Number(boat.longitude);
+      const spd = boat.speed !== undefined ? Number(boat.speed).toFixed(1) : '0.0';
+      const crs = boat.course !== undefined && boat.course !== null && !isNaN(Number(boat.course)) ? Math.round(Number(boat.course)) : 0;
+      const distFromMe = currentLat.value !== 0 ? calculateDistance(currentLat.value, currentLng.value, lat, lng).toFixed(2) : '-';
+
+      const popupHtml = `
+        <div style="font-family: sans-serif; font-size: 11px; color: #0f172a; min-width: 130px;">
+          <div style="font-weight: 800; color: #0284c7; font-size: 12px; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; margin-bottom: 4px;">
+            🚤 ${boatId}
+          </div>
+          <div><strong>Kelajuan:</strong> ${spd} kts</div>
+          <div><strong>Haluan:</strong> ${crs}°</div>
+          <div><strong>Jarak:</strong> ${distFromMe} NM</div>
+          <div style="font-size: 9px; color: #64748b; margin-top: 3px;">
+            📍 ${formatCoordinate(lat, true)} ${formatCoordinate(lng, false)}
+          </div>
+        </div>
+      `;
+
+      const otherBoatIcon = L.divIcon({
+        className: 'other-boat-marker',
+        html: `
+          <div style="display: flex; flex-direction: column; align-items: center; cursor: pointer;">
+            <div style="background: rgba(15, 23, 42, 0.92); color: #38bdf8; border: 1.5px solid #38bdf8; border-radius: 5px; padding: 2px 6px; font-size: 9px; font-weight: 800; font-family: monospace; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.6); margin-bottom: 2px;">
+              🚤 ${boatId} (${spd} kts)
+            </div>
+            <div style="width: 16px; height: 16px; background: #0284c7; border: 2px solid #ffffff; border-radius: 50%; box-shadow: 0 0 10px #38bdf8; display: flex; align-items: center; justify-content: center; transform: rotate(${crs}deg);">
+              <div style="width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; border-bottom: 6px solid #ffffff; margin-top: -2px;"></div>
+            </div>
+          </div>
+        `,
+        iconSize: [90, 42],
+        iconAnchor: [45, 38]
+      });
+
+      if (otherFleetMarkers.has(boatId)) {
+        const existing = otherFleetMarkers.get(boatId);
+        existing.marker.setLatLng([lat, lng]);
+        existing.marker.setIcon(otherBoatIcon);
+        existing.marker.setPopupContent(popupHtml);
+      } else {
+        const newMarker = L.marker([lat, lng], { icon: otherBoatIcon })
+          .addTo(map.value)
+          .bindPopup(popupHtml);
+        otherFleetMarkers.set(boatId, { marker: newMarker });
+      }
+    });
+  } catch (err) {
+    console.error("Ralat muat semula kedudukan aset lain:", err);
+  }
+};
+
+const langganKedudukanAsetLain = () => {
+  if (fleetTelemetryChannel) {
+    supabase.removeChannel(fleetTelemetryChannel);
+    fleetTelemetryChannel = null;
+  }
+
+  // 1. Langgan Postgres Changes sru_telemetry
+  fleetTelemetryChannel = supabase
+    .channel('sru_fleet_telemetry_live')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'sru_telemetry' }, () => {
+      if (currentScreen.value === 'map') {
+        muatSemulaKedudukanAsetLain();
+      }
+    })
+    .subscribe();
+
+  // 2. Polling sandaran setiap 3 saat
+  if (fleetPresenceTimer) clearInterval(fleetPresenceTimer);
+  fleetPresenceTimer = setInterval(() => {
+    if (currentScreen.value === 'map') {
+      muatSemulaKedudukanAsetLain();
+    }
+  }, 3000);
+
+  // Ambil data pertama serta-merta
+  muatSemulaKedudukanAsetLain();
 };
 
 // Cipta fungsi pembantu ini di bawah muatTurunPelanSAROPSDariWeb untuk auto-focus peta
@@ -2207,6 +2344,26 @@ const hentiTracking = async () => {
   mobCoord.value = null;
   paparSightingModal.value = false;
   paparMobModal.value = false;
+
+  // Bersihkan lapisan polygon & laluan pelan
+  planPolygonsList.value.forEach(p => {
+    if (map.value && p) map.value.removeLayer(p);
+  });
+  planPolygonsList.value = [];
+
+  // Bersihkan penanda armada bot lain
+  if (fleetPresenceTimer) {
+    clearInterval(fleetPresenceTimer);
+    fleetPresenceTimer = null;
+  }
+  if (fleetTelemetryChannel) {
+    supabase.removeChannel(fleetTelemetryChannel);
+    fleetTelemetryChannel = null;
+  }
+  otherFleetMarkers.forEach(m => {
+    if (map.value && m.marker) map.value.removeLayer(m.marker);
+  });
+  otherFleetMarkers.clear();
 
   if (cspLine.value) { map.value.removeLayer(cspLine.value); cspLine.value = null }
   if (cspMarker.value) { map.value.removeLayer(cspMarker.value); cspMarker.value = null }
