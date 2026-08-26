@@ -603,7 +603,7 @@
           </button>
 
           <!-- 5. MESSAGE -->
-          <button @click="paparChat = !paparChat; paparWaypointList = false; paparSightingModal = false; paparMobModal = false; paparConfirmStop = false; unreadCount = 0" style="flex: 1; background: rgba(30, 41, 59, 0.7); color: #60a5fa; border: 1px solid #334155; padding: 8px 0; border-radius: 8px; font-size: 8px; font-weight: 800; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 1px; transition: 0.2s; position: relative;">
+          <button @click="toggleChatModal" style="flex: 1; background: rgba(30, 41, 59, 0.7); color: #60a5fa; border: 1px solid #334155; padding: 8px 0; border-radius: 8px; font-size: 8px; font-weight: 800; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 1px; transition: 0.2s; position: relative;">
             <span v-if="unreadCount > 0" style="position: absolute; top: -5px; right: 5px; background: #ef4444; color: white; border-radius: 10px; padding: 1px 6px; font-size: 10px; font-weight: bold; border: 2px solid #1e293b;">{{ unreadCount }}</span>
             <span style="font-size: 15px;">💬</span> CHAT
           </button>
@@ -969,7 +969,25 @@ const tunjukToastNotifikasi = (jenis, ikon, tajuk, mesej, tempoh = 6000) => {
   }
 }
 
-const klikToastNotifikasi = () => {
+const toggleChatModal = async () => {
+  paparChat.value = !paparChat.value
+  paparWaypointList.value = false
+  paparSightingModal.value = false
+  paparMobModal.value = false
+  paparConfirmStop.value = false
+  paparCuacaModal.value = false
+  unreadCount.value = 0
+
+  if (paparChat.value) {
+    await nextTick()
+    autoScrollChat()
+    setTimeout(autoScrollChat, 60)
+    setTimeout(autoScrollChat, 180)
+    setTimeout(autoScrollChat, 350)
+  }
+}
+
+const klikToastNotifikasi = async () => {
   if (toastNotifikasi.value.jenis === 'mob') {
     paparMobModal.value = true
   } else if (toastNotifikasi.value.jenis === 'sighting') {
@@ -977,6 +995,10 @@ const klikToastNotifikasi = () => {
   } else {
     paparChat.value = true
     unreadCount.value = 0
+    await nextTick()
+    autoScrollChat()
+    setTimeout(autoScrollChat, 80)
+    setTimeout(autoScrollChat, 200)
   }
   toastNotifikasi.value.papar = false
 }
@@ -2443,6 +2465,8 @@ const muatTurunMesej = async () => {
     senaraiMesej.value = data
   }
   autoScrollChat()
+  setTimeout(autoScrollChat, 100)
+  setTimeout(autoScrollChat, 300)
 }
 
 const hantarMesej = async () => {
@@ -2461,6 +2485,8 @@ const hantarMesej = async () => {
     if (data) {
       senaraiMesej.value.push(data)
       autoScrollChat()
+      setTimeout(autoScrollChat, 80)
+      setTimeout(autoScrollChat, 200)
     }
   }
 }
