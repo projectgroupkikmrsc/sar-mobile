@@ -623,6 +623,10 @@ import { createClient } from '@supabase/supabase-js'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { Geolocation } from '@capacitor/geolocation'
+import { registerPlugin } from '@capacitor/core'
+import { TileLayerOffline } from 'leaflet.offline'
+
+const BackgroundGeolocation = registerPlugin('BackgroundGeolocation')
 
 // =========================================================================
 // INNESIALISASI DATABASE SUPABASE KAU (CUN MELECUN TERUS)
@@ -688,6 +692,7 @@ const userMarker = ref(null)
 const currentLat = ref(0)
 const currentLng = ref(0)
 const watchId = ref(null)
+const backgroundWatcherId = ref(null)
 const isTracking = ref(false)
 let mapHeartbeatTimer = null
 const cspLine = ref(null)
@@ -1364,24 +1369,33 @@ const initMap = () => {
   // 1. Cipta Enjin Peta Leaflet
   const enjinPeta = L.map(mapContainer, { zoomControl: false }).setView([4.2105, 101.9758], 6);
 
-  // 2. Sediakan Lapisan-Lapisan (Simpan dalam refs supaya boleh diakses oleh tukarModPeta)
   streetLayer.value = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap contributors',
+    maxZoom: 19,
+    crossOrigin: true,
     zIndex: 1
   });
 
+  // Esri Satellite kekal biasa (TOS tidak membenarkan offline cache)
   satelliteLayer.value = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
     attribution: 'Tiles © Esri',
+    maxZoom: 19,
+    crossOrigin: true,
     zIndex: 1
   });
 
   labelLayer.value = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
     attribution: 'Labels © Esri',
+    maxZoom: 19,
+    crossOrigin: true,
     zIndex: 2
   });
 
+  // OpenSeaMap seamarks
   const seaMapLayer = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
     attribution: '© OpenSeaMap contributors',
+    maxZoom: 18,
+    crossOrigin: true,
     zIndex: 10
   });
 
@@ -1396,6 +1410,12 @@ const initMap = () => {
   map.value.on('dragstart', () => {
     isFollowing.value = false
   });
+
+  setTimeout(() => {
+    if (map.value) {
+      map.value.invalidateSize();
+    }
+  }, 300);
 
   muatTurunPelanSAROPSDariWeb();
   langganKedudukanAsetLain();
@@ -1726,53 +1746,70 @@ const mulaTracking = async () => {
     isTracking.value = true;
     console.log("Memulakan penjejakan GPS...");
 
+    // 1. Cuba Foreground Service Background Geolocation dahulu (Khas untuk Android APK)
+    let backgroundSuccess = false;
     try {
-      // Mod Peranti Mudah Alih (Capacitor Engine)
-      const permission = await Geolocation.requestPermissions()
-      if (permission.location !== 'granted') {
-        alert('Kebenaran Lokasi diperlukan untuk operasi SAR!');
-        isTracking.value = false; // Set tracking to false if permission denied
-        console.warn("Kebenaran lokasi ditolak.");
-        return;
+      if (BackgroundGeolocation) {
+        const bgWatcher = await BackgroundGeolocation.addWatcher(
+          {
+            backgroundMessage: "M-SRU Navigator sedang menjejak & menyiarkan kedudukan bot SAR ke HQ.",
+            backgroundTitle: `OPERASI SAR: ${selectedAsset.value || 'BOT AKTIF'}`,
+            requestPermissions: true,
+            stale: false,
+            distanceFilter: 0 // Rekod setiap pergerakan
+          },
+          (location, error) => {
+            if (error) {
+              console.warn("Ralat Background Geolocation callback:", error);
+              return;
+            }
+            if (location) {
+              const speedInMps = location.speed !== undefined && location.speed !== null ? location.speed : null;
+              const headingDeg = location.bearing !== undefined && location.bearing !== null ? location.bearing : null;
+              kemaskiniLokasiSatelit(location.latitude, location.longitude, speedInMps, headingDeg);
+            }
+          }
+        );
+        backgroundWatcherId.value = bgWatcher;
+        backgroundSuccess = true;
+        console.log("✅ Background Geolocation Foreground Service diaktifkan:", bgWatcher);
       }
-      console.log("Kebenaran lokasi diberikan.");
+    } catch (bgErr) {
+      console.warn("BackgroundGeolocation tidak tersedia, menggunakan Geolocation biasa:", bgErr);
+    }
 
-      watchId.value = await Geolocation.watchPosition({
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0 // Force fresh position
-      }, (position, err) => { // Capacitor's watchPosition callback has two arguments
-        if (err) {
-          console.error("Ralat Capacitor Geolocation watchPosition:", err);
-          // Optionally, alert the user or stop tracking if errors persist
-          // alert('Ralat GPS peranti: ' + err.message);
-          // hentiTracking(); // Consider stopping if critical error
+    // 2. Jika bukan dalam persekitaran Background Geolocation atau di web browser
+    if (!backgroundSuccess) {
+      try {
+        const permission = await Geolocation.requestPermissions();
+        if (permission.location !== 'granted') {
+          alert('Kebenaran Lokasi diperlukan untuk operasi SAR!');
+          isTracking.value = false;
           return;
         }
-        if (position) {
-          console.log("Posisi GPS diterima (Capacitor):", position.coords.latitude, position.coords.longitude, "Speed:", position.coords.speed, "Heading:", position.coords.heading);
-          kemaskiniLokasiSatelit(position.coords.latitude, position.coords.longitude, position.coords.speed, position.coords.heading);
-        } else {
-          console.warn("Tiada posisi GPS diterima dari Capacitor.");
-        }
-      })
-    } catch (webError) {
-      // Mod Browser/Laptop Fallback (Penyelamat)
-      if (webError.message.includes('Not implemented on web') || !window.Capacitor) { // Check if Capacitor is not available
+
+        watchId.value = await Geolocation.watchPosition({
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0
+        }, (position, err) => {
+          if (err) {
+            console.error("Ralat Capacitor Geolocation watchPosition:", err);
+            return;
+          }
+          if (position) {
+            kemaskiniLokasiSatelit(position.coords.latitude, position.coords.longitude, position.coords.speed, position.coords.heading);
+          }
+        });
+      } catch (webError) {
         console.log("Menggunakan GPS Web Browser...");
         watchId.value = navigator.geolocation.watchPosition((position) => {
-          console.log("Posisi GPS diterima (Web):", position.coords.latitude, position.coords.longitude, "Speed:", position.coords.speed, "Heading:", position.coords.heading);
           kemaskiniLokasiSatelit(position.coords.latitude, position.coords.longitude, position.coords.speed, position.coords.heading);
         }, (err) => {
           console.error("Ralat Web Geolocation watchPosition:", err);
           alert('Ralat GPS pelayar: ' + err.message);
-          isTracking.value = false; // Set tracking to false on web error
+          isTracking.value = false;
         }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
-      } else {
-        // This catch block might also be hit for other Capacitor errors not related to 'Not implemented on web'
-        console.error("Ralat umum Capacitor Geolocation:", webError);
-        alert('Ralat umum GPS peranti: ' + webError.message);
-        isTracking.value = false;
       }
     }
   } catch (e) {
@@ -2306,6 +2343,17 @@ const toggleWaypointList = async () => {
   if (paparWaypointList.value) await muatTurunDetailPelanSAROPS();
 };
 const hentiTracking = async () => {
+  // Hentikan Background Geolocation jika aktif
+  if (backgroundWatcherId.value && BackgroundGeolocation) {
+    try {
+      await BackgroundGeolocation.removeWatcher({ id: backgroundWatcherId.value });
+      backgroundWatcherId.value = null;
+      console.log("🛑 Background Geolocation dihentikan.");
+    } catch (e) {
+      console.warn("Ralat menghentikan BackgroundGeolocation:", e);
+    }
+  }
+
   if (watchId.value) {
     // Semak jika watchId adalah dari navigator.geolocation (nombor) atau Capacitor (objek dengan id)
     if (typeof watchId.value === 'number') { // Web Geolocation watchId is a number

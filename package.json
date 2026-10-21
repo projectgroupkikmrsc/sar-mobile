@@ -17,6 +17,7 @@
     "@capacitor/ios": "^6.2.1",
     "@supabase/supabase-js": "^2.107.0",
     "leaflet": "^1.9.4",
+    "leaflet.offline": "^3.2.1",
     "vue": "^3.4.29"
   },
   "devDependencies": {

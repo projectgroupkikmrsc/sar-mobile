@@ -25,3 +25,11 @@ dist-ssr
 
 .vercel
 .env*
+
+# Android build outputs
+android/.gradle
+android/build
+android/app/build
+android/app/build/outputs/apk
+*.apk
+*.aab
